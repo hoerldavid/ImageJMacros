@@ -1,5 +1,4 @@
 '''
-Created on 19.02.2015
 
 @author: David
 '''
@@ -14,7 +13,9 @@ from ij.plugin.frame import RoiManager
 from ij.io import OpenDialog
 from java.lang import Integer
 
-import os.path
+import os.path, os
+import csv
+import re
 
 
 # Particle analyzer settings
@@ -29,8 +30,12 @@ fileSegmentedCells = os.path.join(dc1.getDirectory(), dc1.getFileName())
 dc2 = OpenDialog("Select feature segmentation results")
 fileSegmentedFeatures = os.path.join(dc2.getDirectory(), dc2.getFileName())
 
+dc3 = OpenDialog("Select file to analyze")
+fileData = os.path.join(dc3.getDirectory(), dc3.getFileName())
+
 imageSegmentedCells = IJ.openImage(fileSegmentedCells)
 imageSegmentedFeatures = IJ.openImage(fileSegmentedFeatures)
+imageData = IJ.openImage(fileData)
 
 
 nSlices = imageSegmentedCells.getNSlices()
@@ -82,17 +87,89 @@ for i in range(nSlices):
         rm.reset()
         
 # show example results
-imageSegmentedFeatures.show()
+# imageSegmentedFeatures.show()
+# 
+# sliceToShow = 10
+# cellToShow = 0
+# 
+# imageSegmentedFeatures.setSlice(sliceToShow)
+# 
+# #first roi in manager --> cell
+# rm.add(imageSegmentedFeatures, cellRois[sliceToShow][cellToShow], 0)
+# 
+# # other rois --> particles
+# for i in range(len(particleRois[sliceToShow][cellToShow])):
+#     rm.add(imageSegmentedFeatures, particleRois[sliceToShow][cellToShow][i], 0)
+    
+# print(imageSegmentedFeatures.getStatistics().toString())
+# rm.select(0)
+# print(imageSegmentedFeatures.getStatistics().toString())
 
-sliceToShow = 10
-cellToShow = 0
-
-imageSegmentedFeatures.setSlice(sliceToShow)
-
-#first roi in manager --> cell
-rm.add(imageSegmentedFeatures, cellRois[sliceToShow][cellToShow], 0)
-
-# other rois --> particles
-for i in range(len(particleRois[sliceToShow][cellToShow])):
-    rm.add(imageSegmentedFeatures, particleRois[sliceToShow][cellToShow][i], 0)
+def statisticsStringToCSV(statStr):
+    p = re.compile("[a-z]+=[0-9\.]+")
+    names = list()
+    vals = dict()
+    # iterate over all name=value pairs in string
+    for st in p.findall(statStr):
+        names.append(st.split("=")[0])
+        vals[st.split("=")[0]] = st.split("=")[1].replace(".", ",")
         
+    return (names, vals)
+    
+# statisticsStringToCSV(imageSegmentedFeatures.getStatistics().toString())
+
+cellCSVFile = fileData + "_cells.csv"
+particles = fileData + "_particles.csv"
+
+csvfile = open(cellCSVFile, "w")
+writer = None
+
+# statistics for all cells
+for i in range(nSlices):
+    imageData.setSlice(i + 1)
+    for j in range(len(cellRois[i])):
+        
+        imageData.setRoi(cellRois[i][j])
+        fieldnames, row = statisticsStringToCSV(imageData.getStatistics().toString())
+        imageData.killRoi()
+        
+        fieldnames = ["slice", "cell"] + fieldnames
+        row["slice"] = str(i)
+        row["cell"] = str(j)        
+        
+        if not writer:
+            writer = csv.DictWriter(csvfile, delimiter=";", lineterminator="\r", fieldnames=fieldnames)
+            writer.writerow(dict(zip(row.keys(), row.keys())))
+#             writer.writeheader()
+        
+        writer.writerow(row)
+     
+csvfile.close()
+
+# statistics for all particles
+
+csvfile = open(particles, "w")
+writer = None
+
+for i in range(nSlices):
+    imageData.setSlice(i + 1)
+    for j in range(len(particleRois[i])):
+        for k in range(len(particleRois[i][j])):
+        
+            imageData.setRoi(particleRois[i][j][k])
+            fieldnames, row = statisticsStringToCSV(imageData.getStatistics().toString())
+            imageData.killRoi()
+            
+            fieldnames = ["slice", "cell", "particle"] + fieldnames
+            row["slice"] = str(i)
+            row["cell"] = str(j)        
+            row["particle"] = str(k)
+            
+            if not writer:
+                writer = csv.DictWriter(csvfile, delimiter=";", lineterminator="\r", fieldnames=fieldnames)
+                writer.writerow(dict(zip(row.keys(), row.keys())))
+    #             writer.writeheader()
+            
+            writer.writerow(row)
+     
+csvfile.close()
