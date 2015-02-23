@@ -19,8 +19,12 @@ import re
 
 
 # Particle analyzer settings
-minCellSize = 2000
-minFeatureSize = 10
+minCellSize = 3000
+minFeatureSize = 50
+
+
+# TODO: stanard output doesn't give us anything but count, minmax, mean
+desiredMeasurements = Measurements.MEAN + Measurements.MIN_MAX
 
 
 # open segmentation result files
@@ -76,7 +80,7 @@ for i in range(nSlices):
         rm.select(imageSegmentedFeatures, 0)
         
         rtCells = ResultsTable()
-        paCells = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rtCells, minFeatureSize,4000)
+        paCells = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rtCells, minFeatureSize, Integer.MAX_VALUE)
         paCells.analyze(imageSegmentedFeatures)
         
         particleRois[i].append(rm.getRoisAsArray())
@@ -131,6 +135,7 @@ for i in range(nSlices):
         
         imageData.setRoi(cellRois[i][j])
         fieldnames, row = statisticsStringToCSV(imageData.getStatistics().toString())
+#         print(imageData.getStatistics().stdDev)
         imageData.killRoi()
         
         fieldnames = ["slice", "cell"] + fieldnames
