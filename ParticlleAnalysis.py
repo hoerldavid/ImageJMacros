@@ -16,11 +16,14 @@ from java.lang import Integer
 import os.path, os
 import csv
 import re
+import sys
 
 
 # Particle analyzer settings
 minCellSize = 3000
-minFeatureSize = 50
+minFeatureSize = 150
+
+minCircularity = 0.25
 
 
 # TODO: stanard output doesn't give us anything but count, minmax, mean
@@ -55,7 +58,7 @@ for i in range(1,nSlices+1):
     
     # particle analyzer wants a results table
     rtCells = ResultsTable()
-    paCells = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rtCells, minCellSize, Integer.MAX_VALUE)
+    paCells = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rtCells, minCellSize, Integer.MAX_VALUE, minCircularity, 1.0)
     paCells.analyze(imageSegmentedCells)
 
     # save rois to list
@@ -80,7 +83,7 @@ for i in range(nSlices):
         rm.select(imageSegmentedFeatures, 0)
         
         rtCells = ResultsTable()
-        paCells = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rtCells, minFeatureSize, Integer.MAX_VALUE)
+        paCells = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rtCells, minFeatureSize, Integer.MAX_VALUE, minCircularity, 1.0)
         paCells.analyze(imageSegmentedFeatures)
         
         particleRois[i].append(rm.getRoisAsArray())
@@ -165,10 +168,15 @@ for i in range(nSlices):
             fieldnames, row = statisticsStringToCSV(imageData.getStatistics().toString())
             imageData.killRoi()
             
-            fieldnames = ["slice", "cell", "particle"] + fieldnames
+            imageData.setRoi(cellRois[i][j])
+            
+            fieldnames = ["slice", "cell", "particle", "cell_mean"] + fieldnames
             row["slice"] = str(i)
             row["cell"] = str(j)        
             row["particle"] = str(k)
+            row["cell_mean"] = str(imageData.getStatistics().mean)
+            
+            imageData.killRoi()
             
             if not writer:
                 writer = csv.DictWriter(csvfile, delimiter=";", lineterminator="\r", fieldnames=fieldnames)
@@ -178,3 +186,4 @@ for i in range(nSlices):
             writer.writerow(row)
      
 csvfile.close()
+sys.exit()
