@@ -1,4 +1,6 @@
 '''
+mask of segmented cells + mask of segmented particles (chromocenters) + raw image
+--> CSV of statistics with corresponding cells, particles
 
 @author: David
 '''
@@ -22,9 +24,7 @@ import sys
 # Particle analyzer settings
 minCellSize = 3000
 minFeatureSize = 150
-
 minCircularity = 0.25
-
 
 # TODO: stanard output doesn't give us anything but count, minmax, mean
 desiredMeasurements = Measurements.MEAN + Measurements.MIN_MAX
@@ -37,6 +37,7 @@ fileSegmentedCells = os.path.join(dc1.getDirectory(), dc1.getFileName())
 dc2 = OpenDialog("Select feature segmentation results")
 fileSegmentedFeatures = os.path.join(dc2.getDirectory(), dc2.getFileName())
 
+# open raw image file
 dc3 = OpenDialog("Select file to analyze")
 fileData = os.path.join(dc3.getDirectory(), dc3.getFileName())
 
@@ -46,7 +47,6 @@ imageData = IJ.openImage(fileData)
 
 
 nSlices = imageSegmentedCells.getNSlices()
-# print(nSlices)
 
 rm = RoiManager()
 
@@ -113,6 +113,9 @@ for i in range(nSlices):
 # print(imageSegmentedFeatures.getStatistics().toString())
 
 def statisticsStringToCSV(statStr):
+    '''
+    get dict from ImageStatistics.toString()
+    '''
     p = re.compile("[a-z]+=[0-9\.]+")
     names = list()
     vals = dict()
