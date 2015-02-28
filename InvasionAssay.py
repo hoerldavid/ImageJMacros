@@ -9,7 +9,7 @@ Automated segmentation and invasion depth measurement
 
 # Evil undocumented APIs !!!
 from Utilities import Counter3D
-from mcib3d.geom import Object3D, Vector3D
+from mcib3d.geom import Object3D, Vector3D, Point3D
 from mcib3d.geom import Object3DPoint, Object3DSurface
 from mcib3d.image3d import Segment3DImage
 
@@ -18,7 +18,7 @@ from java.util import ArrayList
 from java.lang import Integer
 
 from ij.plugin import Resizer
-from ij.io import DirectoryChooser
+from ij.io import DirectoryChooser, OpenDialog
 from ij import IJ, ImagePlus
 from ij.process import StackConverter, StackProcessor
 
@@ -39,12 +39,14 @@ mscThreshold = 90
 mscMin = 200
 # mscMax = Integer.MAX_VALUE
 
-downsampleXY = 0.5
-# downsampleXY = 1
+
+
+#downsampleXY = 0.5
+downsampleXY = 1
 downsampleZ = downsampleXY
 
 # handle Directories starting with any of this
-dirPrefixes = ["F", "G"]
+# dirPrefixes = ["F", "G"]
 
 # END USER DEFINED PARAMETERS
 
@@ -58,7 +60,8 @@ def startsWithAny(s, prefixes):
     return False
 
 
-def assayMV(path):
+
+def assayMV(path, spheroT=spheroThreshold, mscT=mscThreshold, segmentWholeSpheroVolume=False):
     '''
     run the invasion assay - image files should be in directory path
     @return: list of distances (in pixels, consider downsampling)
@@ -101,7 +104,7 @@ def assayMV(path):
     
     # segment cells and get objects    
     IJ.log("segmenting cells...")
-    mscSegmenter = Segment3DImage(imageMSC, mscThreshold, Integer.MAX_VALUE)
+    mscSegmenter = Segment3DImage(imageMSC, mscT, Integer.MAX_VALUE)
     mscSegmenter.setMinSizeObject(mscMin)
     mscSegmenter.segment()    
     mscObjects = mscSegmenter.getSurfaceObjectsImage3D().getObjects3D()
@@ -110,14 +113,35 @@ def assayMV(path):
     
     # segment the spheroid
     IJ.log("segmenting spheroid...")
-    spheroSegmenter = Segment3DImage(imageSphero, spheroThreshold, Integer.MAX_VALUE)
+    spheroSegmenter = Segment3DImage(imageSphero, spheroT, Integer.MAX_VALUE)
     spheroSegmenter.setMinSizeObject(spheroMin)
-    spheroSegmenter.segment()    
-    spheroObjects = spheroSegmenter.getSurfaceObjectsImage3D().getObjects3D()
+    spheroSegmenter.segment()
+    
+    ### Segment the whole sphero instead of just the surface
+    # this allows checking whether a cell lies inside the volume
+    # however, the whole volume will be colored in the control image!
+    if segmentWholeSpheroVolume:    
+        spheroObjects = spheroSegmenter.getLabelledObjectsImage3D().getObjects3D()
+    else:
+        spheroObjects = spheroSegmenter.getSurfaceObjectsImage3D().getObjects3D()
     IJ.log("segmenting spheroid... done.")
-    spheroObject = spheroObjects[0]
+    
+    # skip dataset if no sphero was found
+    if len(spheroObjects) == 0:
+        IJ.log("ERROR: no spheroid could be found")
+        return(list(), None)
+    
+    maxVolume = 0
+    biggestObject = 0
+    for i in range(len(spheroObjects)):
+        if spheroObjects[i].getVolumePixels() > maxVolume:
+            biggestObject = i
+            maxVolume = spheroObjects[i].getVolumePixels()
+            
+    spheroObject = spheroObjects[biggestObject]
+    
     if len(spheroObjects) != 1:
-        IJ.log("WARNING: found " + str(len(mscObjects)) + " spheroid objects. Will only use first. Cosider re-evaluating thresholds.")
+        IJ.log("WARNING: found " + str(len(mscObjects)) + " spheroid objects. Using the biggest.")
         
     
     # color copy of msc-image to label segmentations in
@@ -127,6 +151,9 @@ def assayMV(path):
     # mark spheroid in red
     spheroObject.draw(imageControl.getStack(), 255, 0, 0)    
     
+    #closedSphero = spheroObject.getObject3DSurface()
+    #closedSphero.draw(imageControl.getStack(), 0, 0, 255)
+    
     # calculate distances
     distances = list()
     nCells = len(mscObjects)
@@ -134,12 +161,20 @@ def assayMV(path):
     for o in mscObjects:
         IJ.log("handling cell " + str(curCell) + " of " + str(nCells))
         curCell += 1
+               
+        cellCenter = Point3D(o.getCenterX(), o.getCenterY(), o.getCenterZ())
+        
+        # skip cells not inside sphero ONLY IF whole sphero was segmented
+        if not spheroObject.inside(cellCenter) and segmentWholeSpheroVolume:
+            IJ.log("not inside spheroid, skipping.")
+            continue
+        
         distances.append(o.distCenterBorderUnit(spheroObject))
         # mark mscs in green
         o.draw(imageControl.getStack(), 0, 255, 0)
         
     # save control image
-    IJ.save(imageControl, os.path.join(path, "control.tif"))
+    # IJ.save(imageControl, os.path.join(path, "control.tif"))
     
     # save distances as CSV
     outfile = os.path.join(path, "distances.csv")
@@ -154,7 +189,7 @@ def assayMV(path):
         
     outfd.close()
     
-    return distances
+    return (distances, imageControl)
     
     
 #     
@@ -255,15 +290,32 @@ def assayMV(path):
 dc = DirectoryChooser("Choose directory to process!")
 inputDir = dc.getDirectory()
 
+dc2 = OpenDialog("Choose parameter file!")
+paramFile = open(os.path.join(dc2.getDirectory(), dc2.getFileName()), "r")
+
+paramDict = dict()
+
+for l in paramFile:
+    ls = l.split(",")
+    #print(ls[6].startswith("CELLSOUTSIDE"))
+    if ls[1]:
+        paramDict["_".join(ls[0:4])] = (int(ls[5]), int(ls[4]), ls[6].startswith("CELLSOUTSIDE"))
+    elif ls[0]:
+        paramDict["_".join(ls[0:1]+ls[2:4])] = (int(ls[5]), int(ls[4]), ls[6].startswith("CELLSOUTSIDE"))
+    
+# print(paramDict)   
+
 if inputDir.endswith(os.path.sep):
     inputDir = inputDir[:-1]
+
+    
 dirs = os.walk(inputDir)
 sdirs = list()
 # process only the "mv-workspace" directories   
 # of directories starting with specified prefixes
 for d in dirs:
     #print(d[0])
-    if startsWithAny(d[0].split(os.path.sep)[-1], dirPrefixes) and "mv-workspace" in d[1]:
+    if d[0].split(os.path.sep)[-1] in paramDict.keys() and "mv-workspace" in d[1]:
         sdirs.append(os.path.join(d[0], "mv-workspace"))
     
     
@@ -272,11 +324,18 @@ delimiter = ";"
 
 IJ.log("-- Handling multiple input directories:");
 for i in sdirs:
+    experimentName = i.split(os.path.sep)[-2]
     IJ.log("- Handing dir: " + i);
-    tDists = assayMV(i);
-    resultFd.write(i + delimiter)
+    IJ.log("msc Threshold: " + str(paramDict[experimentName][0]))
+    IJ.log("sphero Threshold: " + str(paramDict[experimentName][1]))
+    (tDists, resImage) = assayMV(i, paramDict[experimentName][0], paramDict[experimentName][1], paramDict[experimentName][2]);
+    resultFd.write(experimentName + delimiter)
     resultFd.write(delimiter.join(map(str, tDists)).replace('.', ','))
     resultFd.write("\r")
+    
+    if resImage:
+        IJ.save(resImage, os.path.join(inputDir, experimentName + "_control.tif"))
+    
     
 resultFd.close()
 
