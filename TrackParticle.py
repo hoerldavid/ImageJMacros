@@ -1,27 +1,31 @@
 from ij import WindowManager, IJ, ImagePlus, ImageStack
-from ij.process import StackConverter, StackProcessor, ByteProcessor
+from ij.process import StackConverter, ByteProcessor
+from ij.process import ColorProcessor
 from ij.plugin.frame import RoiManager
 from ij.plugin.filter import Analyzer
 from ij.measure import ResultsTable
 from ij.plugin.filter import ParticleAnalyzer
 
 from java.lang import Integer
-from java.awt.Color import BLACK, WHITE
+from java.awt.Color import BLACK, WHITE, GRAY, RED, GREEN
 
 import os
 
-
-path = "/Users/david/Desktop/Kinetik 7"
+# USER INPUT
+path = "C:\Users\David\Desktop\\150211 live U2OS_GFP export\\Kinetik 7\\"
 fileName = "GFP FKBP-LacI-RFP recruitment kinetic 7c1_cut.tiff"
+
+
+# SETTINGS
+outFileName = "kintetic.csv"
+
+timesDilate1 = 3
+timesDilate2 = 5
+minParticleSize = 10
 
 
 classifiedImageName = "Classified image"
 classifiedImage = WindowManager.getImage(classifiedImageName)
-
-timesDilate1 = 3
-timesDilate2 = 5
-
-minParticleSize = 10
 
 # load image to measure in
 impSignal = IJ.openImage(os.path.join(path, fileName))
@@ -33,22 +37,20 @@ StackConverter(classifiedImage).convertToGray8()
 for i in range(1, classifiedImage.getNSlices()+1):
     classifiedImage.setSlice(i)
     classifiedImage.getProcessor().autoThreshold()
-    
+
+# get rm, rt and analyzer    
 rm = RoiManager.getInstance2()
 if not rm:
-    rm = RoiManager()
-    
+    rm = RoiManager()    
 rt = Analyzer.getResultsTable()
 if not rt:
     rt = ResultsTable()
-    Analyzer.setResultsTable(rt)
-    
+    Analyzer.setResultsTable(rt)    
 pa = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rt, minParticleSize, Integer.MAX_VALUE, 0, 1.0)
 
-roiList = list()
 
-dilatedStack = ImageStack(classifiedImage.getWidth(), classifiedImage.getHeight())
-dilated2Stack = ImageStack(classifiedImage.getWidth(), classifiedImage.getHeight())
+# get ROIs of the segmented blobs
+roiList = list()
 
 for i in range(1, classifiedImage.getNSlices()+1):
     classifiedImage.setSlice(i)
@@ -57,7 +59,11 @@ for i in range(1, classifiedImage.getNSlices()+1):
     roiList.append(rm.getRoisAsArray())
     rm.deselect()
     rm.reset()
-    
+
+# dilate the blobs twice, save as images (1 blob -> 1 slice)
+dilatedStack = ImageStack(classifiedImage.getWidth(), classifiedImage.getHeight())
+dilated2Stack = ImageStack(classifiedImage.getWidth(), classifiedImage.getHeight())
+   
 for sliceRois in roiList:
     for r in sliceRois:
         r.setFillColor(BLACK)
@@ -75,7 +81,8 @@ for sliceRois in roiList:
             tBp.dilate()
             
         dilated2Stack.addSlice(tBp.duplicate())
-        
+
+# create dilated blob images, make them binary        
 impDilated1 = ImagePlus("", dilatedStack)
 impDilated2 = ImagePlus("", dilated2Stack)
 StackConverter(impDilated1).convertToGray8()
@@ -87,10 +94,9 @@ for i in range(1, impDilated1.getNSlices()+1):
     impDilated2.getProcessor().autoThreshold()
 
 
-
+# get ROIs for the dilated blobs
 dilated1Rois = list()
 dilated2Rois = list()
-
 for i in range(1, impDilated1.getNSlices() + 1):
     impDilated1.setSlice(i)
     impDilated2.setSlice(i)
@@ -105,50 +111,89 @@ for i in range(1, impDilated1.getNSlices() + 1):
     rm.deselect()
     rm.reset()
 
+
+# DO THE OUTPUT
+
+# open output file + header line
+outFd = open(os.path.join(path, outFileName), "w")
+outFd.write("blob, slice, ring_mean, ring_area, mean, area \n")
+
+# go through all blobs
+
+controlStack = ImageStack(classifiedImage.getWidth(), classifiedImage.getHeight())
 currentRoi = 0    
 for i in range(len(roiList)):
     for j in range(len(roiList[i])):
         
+        
+        
+        outLine = list()
+        outLine.append(str(currentRoi))
+        outLine.append(str(i))
+        
         impSignal.setSlice(i+1)
+        
+        # ROIs to RoiManager
         rCenter = roiList[i][j]
         rDilated1 = dilated1Rois[currentRoi]
         rDilated2 = dilated2Rois[currentRoi]
         
-        rm.addRoi(rCenter)
-        rm.addRoi(rDilated1)
-        rm.addRoi(rDilated2)
+        rCenter.setPosition(i+1)
+        rDilated1.setPosition(i+1)
+        rDilated2.setPosition(i+1)
+                
+        rm.add(impSignal, rCenter, i+1)
+        rm.add(impSignal, rDilated1, i+1)
+        rm.add(impSignal, rDilated2, i+1)
+        
+#         rm.select(0)
+#         rm.runCommand("Measure")
+        
+        # ring ROI = XOR of dilated ROIs
         rm.setSelectedIndexes([1,2])
-        rm.runCommand("XOR")
+        rm.runCommand("XOR")        
         
+        # get stats for ring roi
         rRing = impSignal.getRoi()
-        print "ring", impSignal.getStatistics().toString()
-        impSignal.killRoi()
+        rm.add(impSignal, rRing, i+1)
+
+        rm.select(3)
+#         rm.runCommand("Measure")
         
-        impSignal.setRoi(rDilated1)
-        
-        print "dilated1", impSignal.getStatistics().toString()
-        
-        impSignal.killRoi()
-        
-        impSignal.setRoi(rDilated2)
-        
-        print "dilated2", impSignal.getStatistics().toString()
+        ringStats = impSignal.getStatistics()
+#         print "ring: ", ringStats
+        outLine.append(str(ringStats.mean))
+        outLine.append(str(ringStats.area))
+        rm.deselect()
         
         impSignal.killRoi()
         
-        #rm.selectAndMakeVisible(impSignal, currentRoi * 3)
-        impSignal.setRoi(rCenter)
-        
-        print "center", impSignal.getStatistics().toString()
-        
+        # get stats for center roi
+        impSignal.setRoi(rCenter)        
+        centerStats = impSignal.getStatistics()
+#         print "center; ", centerStats
+        outLine.append(str(centerStats.mean))
+        outLine.append(str(centerStats.area))
         impSignal.killRoi()
         
+        # reset RoiManger 
         rm.deselect()
         rm.reset()
-    
-        currentRoi += 1
-
-
-impDilated1.show()
-impDilated2.show()
         
+        # print output line
+        outFd.write(",".join(outLine) + "\n")
+        
+        currentRoi += 1
+        
+        # controll image
+        tCp = ColorProcessor(classifiedImage.getWidth(), classifiedImage.getHeight())
+        rRing.setFillColor(RED)
+        rCenter.setFillColor(GREEN)
+        tCp.drawRoi(rCenter)
+        tCp.drawRoi(rRing)
+        controlStack.addSlice(tCp.duplicate())
+                
+impControl = ImagePlus("", controlStack)
+# impControl.show()
+rm.close()
+outFd.close()       
