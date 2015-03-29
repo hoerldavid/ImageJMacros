@@ -7,28 +7,29 @@ from ij.measure import ResultsTable
 from ij.plugin.filter import ParticleAnalyzer
 
 from java.lang import Integer
-from java.awt.Color import BLACK, WHITE, GRAY, RED, GREEN
+from java.awt.Color import BLACK, WHITE, RED, GREEN
 
 import os
 
 # USER INPUT
 path = "C:\Users\David\Desktop\\150211 live U2OS_GFP export\\Kinetik 7\\"
-fileName = "GFP FKBP-LacI-RFP recruitment kinetic 7c1_cut.tiff"
+filename = "GFP FKBP-LacI-RFP recruitment kinetic 7"
 
+filename = filename + "c1_cut.tiff"
 
 # SETTINGS
 outFileName = "kintetic.csv"
 
 timesDilate1 = 3
 timesDilate2 = 5
-minParticleSize = 10
-
+minParticleSize = 20
+minCircularity = 0.6
 
 classifiedImageName = "Classified image"
 classifiedImage = WindowManager.getImage(classifiedImageName)
 
 # load image to measure in
-impSignal = IJ.openImage(os.path.join(path, fileName))
+impSignal = IJ.openImage(os.path.join(path, filename))
 impSignal.show()
 
 
@@ -46,7 +47,7 @@ rt = Analyzer.getResultsTable()
 if not rt:
     rt = ResultsTable()
     Analyzer.setResultsTable(rt)    
-pa = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rt, minParticleSize, Integer.MAX_VALUE, 0, 1.0)
+pa = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rt, minParticleSize, Integer.MAX_VALUE, minCircularity, 1.0)
 
 
 # get ROIs of the segmented blobs
@@ -97,6 +98,8 @@ for i in range(1, impDilated1.getNSlices()+1):
 # get ROIs for the dilated blobs
 dilated1Rois = list()
 dilated2Rois = list()
+# set minCircularity to 0 -> do not throw away any blobs because of that
+pa = ParticleAnalyzer(ParticleAnalyzer.ADD_TO_MANAGER , 0 , rt, minParticleSize, Integer.MAX_VALUE, 0, 1.0)
 for i in range(1, impDilated1.getNSlices() + 1):
     impDilated1.setSlice(i)
     impDilated2.setSlice(i)
@@ -126,52 +129,45 @@ for i in range(len(roiList)):
     for j in range(len(roiList[i])):
         
         
-        
         outLine = list()
         outLine.append(str(currentRoi))
         outLine.append(str(i))
         
         impSignal.setSlice(i+1)
         
-        # ROIs to RoiManager
+        # get ROIs
         rCenter = roiList[i][j]
         rDilated1 = dilated1Rois[currentRoi]
-        rDilated2 = dilated2Rois[currentRoi]
-        
+        rDilated2 = dilated2Rois[currentRoi]        
+        # set ROIs to corresponding slice in stack
         rCenter.setPosition(i+1)
         rDilated1.setPosition(i+1)
         rDilated2.setPosition(i+1)
-                
+        # ROIs to RoiManager      
         rm.add(impSignal, rCenter, i+1)
         rm.add(impSignal, rDilated1, i+1)
         rm.add(impSignal, rDilated2, i+1)
         
-#         rm.select(0)
-#         rm.runCommand("Measure")
         
         # ring ROI = XOR of dilated ROIs
         rm.setSelectedIndexes([1,2])
-        rm.runCommand("XOR")        
+        rm.runCommand("XOR") 
         
-        # get stats for ring roi
+        # get stats for ring roi, add it to RoiManager
         rRing = impSignal.getRoi()
         rm.add(impSignal, rRing, i+1)
 
         rm.select(3)
-#         rm.runCommand("Measure")
         
         ringStats = impSignal.getStatistics()
-#         print "ring: ", ringStats
         outLine.append(str(ringStats.mean))
         outLine.append(str(ringStats.area))
-        rm.deselect()
-        
+        rm.deselect()        
         impSignal.killRoi()
         
         # get stats for center roi
         impSignal.setRoi(rCenter)        
         centerStats = impSignal.getStatistics()
-#         print "center; ", centerStats
         outLine.append(str(centerStats.mean))
         outLine.append(str(centerStats.area))
         impSignal.killRoi()
@@ -185,15 +181,17 @@ for i in range(len(roiList)):
         
         currentRoi += 1
         
-        # controll image
+        # color ROIs in control image
         tCp = ColorProcessor(classifiedImage.getWidth(), classifiedImage.getHeight())
         rRing.setFillColor(RED)
         rCenter.setFillColor(GREEN)
         tCp.drawRoi(rCenter)
         tCp.drawRoi(rRing)
         controlStack.addSlice(tCp.duplicate())
-                
+
+# show ROI control image                
 impControl = ImagePlus("", controlStack)
 # impControl.show()
+
 rm.close()
 outFd.close()       
