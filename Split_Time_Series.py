@@ -98,7 +98,7 @@ def main():
             print("reading image " + prefix + s)
             img = IJ.openVirtual(os.path.join(inputPath, prefix + s))
     
-            for i in range(1, img.getNSlices()+1):
+            for i in range(1, img.getImageStackSize()+1):
                         
                 
                 img.setPosition(i)
