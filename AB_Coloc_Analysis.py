@@ -2,7 +2,7 @@
 Analyze AB lawn STED images
 
 detect single spots by DoG + find Maxima
-cut 3x3 pixels around and integrate density
+cut 3x3 pixels around and integrate density / compare to mean / quantiles
 
 '''
 
@@ -51,6 +51,19 @@ def importMSR(path):
     
     return (imps)
 
+def getQuantile(l, p):
+    '''
+    get p-quantile of elements in list (sorted ascending)
+    '''
+    idx = float(p)*(len(l)-1)
+    
+    if ceil(idx) == idx:
+        return(sorted(l)[int(idx)])
+    else:
+        return((sorted(l)[int(floor(idx))] + sorted(l)[int(ceil(idx))]) / 2)
+        
+    
+
 def spotAnalysisSingle(file):
     
     # constants - change if necessary
@@ -58,10 +71,12 @@ def spotAnalysisSingle(file):
     expectedFWHM = 30
     bgFactor = 3 # times FWHM -> radius for bg subtraction 
     
-    measurementCh1 = 3
-    measurementCh2 = 2
+    measurementCh1 = 2
+    measurementCh2 = 3
     
     nRandomRois = 1000
+    
+    randomRoiQuantile = 0.95
      
     expectedFWHMpx = expectedFWHM / pixelSize;
 
@@ -79,8 +94,8 @@ def spotAnalysisSingle(file):
     # do background subtraction
     rad = expectedFWHMpx * bgFactor
     bs = BackgroundSubtracter()
-    bs.rollingBallBackground(imp1.getProcessor(), rad, False, False, False, True, False)
-    bs.rollingBallBackground(imp2.getProcessor(), rad, False, False, False, True, False)
+    bs.rollingBallBackground(imp1.getProcessor(), rad, False, False, False, False, False)
+    bs.rollingBallBackground(imp2.getProcessor(), rad, False, False, False, False, False)
     
         
     imp = imp1
@@ -99,13 +114,21 @@ def spotAnalysisSingle(file):
     
     # calculate random rois
     
+    ipRandrois = imp1.getProcessor().createProcessor(imp1.getWidth(), imp1.getHeight())
+    
     roiCounts = []
     for i in range(nRandomRois):
         myRoi = Roi(randint(1,imp2.getWidth()-1),randint(1,imp2.getHeight()-1),3,3)
         imp2.setRoi(myRoi)
         roiCounts.append(imp2.getStatistics().mean * imp2.getStatistics().pixelCount)
         imp2.killRoi()
+        myRoi.drawPixels(ipRandrois)
         
+    #for r in roiCounts:
+    #    print(r)
+
+    #return
+    
     randomRoiMeanCounts = reduce(lambda x,y: x+y, roiCounts)/nRandomRois
     
     #print(randomRoiMeanCounts)
@@ -139,6 +162,9 @@ def spotAnalysisSingle(file):
 
     means = []
     roiPixelCounts = []
+    
+    ipNoColoc = imp1.getProcessor().createProcessor(imp1.getWidth(), imp1.getHeight())
+    ipColoc = imp1.getProcessor().createProcessor(imp1.getWidth(), imp1.getHeight())
 
     for r in rois:
         imp1.setRoi(r)
@@ -151,16 +177,36 @@ def spotAnalysisSingle(file):
         
         imp1.killRoi()
         imp2.killRoi()
+        
+        if means[-1][1] * roiPixelCounts[-1] / getQuantile(roiCounts, randomRoiQuantile) > 1:
+            r.drawPixels(ipColoc)
+        else:
+            r.drawPixels(ipNoColoc)
 
-    for m in means:
-        print(m[1]/randomRoiMeanCounts)
+    for i in range(len(means)):
+        print(means[i][1] * roiPixelCounts[i] / getQuantile(roiCounts, randomRoiQuantile))
 
+
+    imp1.setTitle("ch1")
+    imp2.setTitle("ch2")
+    
+    impRandrois = ImagePlus("random rois", ipRandrois)
+    impColoc = ImagePlus("coloc", ipColoc)
+    impNoColc = ImagePlus("no coloc", ipNoColoc)
+    
+    imp1.show()
+    imp2.show()
+    impRandrois.show()
+    impColoc.show()
+    impNoColc.show()
+    
+    
     return
     st = imp.getStatistics()
     totalMean = st.mean
     totalPixel = st.pixelCount
 
-    rows = [[means[i], roiPixelCounts[i], totalMean, totalPixel] for i in range(len(means))]
+    rows = [[means[i][0], means[i][1], roiPixelCounts[i], totalMean, totalPixel, getQuantile(roiCounts, 0.5), getQuantile(roiCounts, randomRoiQuantile) ] for i in range(len(means))]
 
     return rows
     
@@ -171,29 +217,24 @@ def main():
     if not od.getPath():
         return
     
-    spotAnalysisSingle(od.getPath())
+    rows = spotAnalysisSingle(od.getPath())
     
     
 
     return
-    outFile = os.path.join(inputDir, "results.csv")
+    outFile = od.getPath() + "results.csv"
     outFD = open(outFile, "w")
 
-    outFD.write("\t".join(["cond", "idx", "spotMean", "spotPx", "totalMean", "totalPx"]) + "\n")
+    outFD.write("\t".join(["spotMean1", "spotMean2" "spotPx", "totalMean", "totalPx", "q50", "q95"]) + "\n")
     
-    files = [os.path.join(inputDir, f) for f in os.walk(inputDir).next()[2] if f.endswith(".msr")]
-    for f in files:
-        cond =  f.split(os.path.sep)[-1].rstrip(".msr").rsplit("_", 1)[0]
-        idx = f.split(os.path.sep)[-1].rstrip(".msr").rsplit("_", 1)[1]
-        rows = spotAnalysisSingle(f)
+   
 
-        outrows = [[cond, idx] + rows[i] for i in range(len(rows))]
+    outrows = [rows[i] for i in range(len(rows))]
 
-        for r in outrows:
-            outFD.write("\t".join(map(str, r)) + "\n")
+    for r in outrows:
+        outFD.write("\t".join(map(str, r)) + "\n")
 
-        print "processed " + f
-
+    
     outFD.close()
     print "DONE"
     
