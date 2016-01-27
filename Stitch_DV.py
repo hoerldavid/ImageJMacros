@@ -13,7 +13,7 @@ from jarray import array
 
 from ij.gui import GenericDialog
 from ij.io import DirectoryChooser
-from ij import IJ
+from ij import IJ, ImageJ
 from ij.process import StackConverter, LUT
 from ij.plugin import ChannelArranger
 from ij.plugin import Concatenator, HyperStackConverter
@@ -28,10 +28,12 @@ ImporterOptions = __import__("loci.plugins.in.ImporterOptions", globals(), local
 import os
 import re
 
-def getParametersFromLog(file):
+def getParametersFromLog(file, deconvBorder):
     '''
     determine the number of tiles and their arrangement from pDV log files
     also determine rolloff (%)
+    deconvolution cuts off border from raw images,
+    pass the number of cut pixels in each dimension to compensate (calculate rolloff correctly)
     '''
     fd = open(file, "r")
     
@@ -67,7 +69,7 @@ def getParametersFromLog(file):
             #print(panelSep)
             
             
-    return((len(xCoords), len(yCoords)), panelSep/(width * pixelSizeX))
+    return((len(xCoords), len(yCoords)), (panelSep - pixelSizeX * deconvBorder)/((width - deconvBorder) * pixelSizeX))
     #return(map(float, xCoords), map(float, yCoords))
 
 
@@ -128,12 +130,30 @@ def makeHyperstack(path, channelOrder = [3,2,1]):
     changeLUTOrder(res2, channelOrder)
     return res2
 
+def getChannelMinAndMax(imps):
+    accu = []
+    for imp in imps:
+        for c in range(1,imp.getNChannels()+1):
+            imp.setC(c)
+            # create empty minmax arrays in first iteration
+            if len(accu) < c:
+                accu.append([])
+            for z in range(1,imp.getNSlices()+1):
+                imp.setZ(z)
+                st = imp.getStatistics()
+                accu[c-1].append((st.min, st.max))
+            
+    res = []
+    for mmax in accu:
+        res.append(reduce(lambda x,y: (min(x[0], y[0]), max(x[1], y[1])), mmax))
+        
+    return res
     
     
 def main():
     
-    # minimal rolloff = 1%?
-    minRolloff = 1
+    # minimal rolloff = 0%?
+    minRolloff = 0
     
     prefs = Preferences.userRoot()
     
@@ -143,6 +163,8 @@ def main():
     CHANNEL_ORDER_KEY = "CHANNEL_ORDER"
     PATTERN_KEY = "PATTERN"
 #    TILE_CONFIG_KEY = "TILE_CONFIG"
+    DUMMY_KEY = "DUMMY_STITCHING"
+    DECONV_BORDER_KEY = "DECONV_BORDER"
     
     
     # ----------- DEFAULT VALUES FOR USER INPUT --------------    
@@ -152,6 +174,8 @@ def main():
     CHANNEL_ORDER_DEF = "3,2,1"
     PATTERN_DEF = "_D3D.dv"
 #    TILE_CONFIG_DEF = "4x4"
+    DUMMY_DEF = False
+    DECONV_BORDER_DEF = "64"
     
     # get earlier values, if they exist
     doSplit = prefs.getBoolean(DO_SPLIT_KEY, DO_SPLIT_DEF)
@@ -159,7 +183,9 @@ def main():
 #    doSingleFile = prefs.getBoolean(DO_SINGLEFILE_KEY, DO_SINGLEFILE_DEF)    
     pattern = prefs.get(PATTERN_KEY, PATTERN_DEF)
     channelOrder = prefs.get(CHANNEL_ORDER_KEY, CHANNEL_ORDER_DEF)
-#    tileConf = prefs.get(TILE_CONFIG_KEY, TILE_CONFIG_DEF)    
+#    tileConf = prefs.get(TILE_CONFIG_KEY, TILE_CONFIG_DEF)  
+    dummyStitching = prefs.getBoolean(DUMMY_KEY, DUMMY_DEF)
+    deconvBorder = prefs.get(DECONV_BORDER_KEY, DECONV_BORDER_DEF)
     
     
     dc = DirectoryChooser("Pick directory to process.")
@@ -170,6 +196,8 @@ def main():
     gd.addStringField("pattern (only process files that end with that)", pattern)
     gd.addStringField("order of channel colors (1=red, 2=green 3=blue)", channelOrder)
     gd.addCheckbox("stitch the split tiles?", doStitch)
+    gd.addCheckbox("dummy stitching (no overlap calculation)", dummyStitching)
+    gd.addStringField("deconvolution border (px)", deconvBorder)
 #    gd.addStringField("Tile Configuration", tileConf)
 #    gd.addCheckbox("Do Single File?", doSingleFile)
     
@@ -189,7 +217,8 @@ def main():
     doStitch = gd.getNextBoolean()
 #    tileConf = str(gd.getNextString())
 #    doSingleFile = gd.getNextBoolean()
-    
+    dummyStitching = gd.getNextBoolean()
+    deconvBorder = gd.getNextString()
     
     # save last user input
     prefs.putBoolean(DO_SPLIT_KEY, doSplit)
@@ -198,7 +227,12 @@ def main():
     
     prefs.put(PATTERN_KEY, pattern)
     prefs.put(CHANNEL_ORDER_KEY, channelOrder)
+    prefs.putBoolean(DUMMY_KEY, dummyStitching)
+    prefs.put(DECONV_BORDER_KEY, deconvBorder)
 #    prefs.put(TILE_CONFIG_KEY, tileConf) 
+
+    ### get int value of deconvBorder
+    deconvBorder = int(deconvBorder)
     
     IJ.log("--- STITCHING STARTED ---")
     
@@ -216,10 +250,11 @@ def main():
             if fi.endswith(pattern):
                 
                 inFile = os.path.join(p,fi)
-                
+
+                outDir = inFile + "_SPLIT"
                 if doSplit:
                     IJ.log("-- SPLITTING: " + inFile)
-                    outDir = inFile + "_SPLIT"
+                    
                     
                     #print(inFile)
                     imps = importTiles(inFile)
@@ -236,9 +271,29 @@ def main():
                         #imps[i] = changeChannelOrder(imps[i], channelOrderInt)
                         #changeLUTOrder(imps[i], channelOrderInt)
                         #outImp.show()
-                        correctSigned16Bit(imps[i])
-                        IJ.saveAsTiff(imps[i], os.path.join(outDir, "tile" + str(i) + ".tif"))
-                        imps[i].close()
+                        #correctSigned16Bit(imps[i])
+                        pass
+                    
+                    levels = getChannelMinAndMax(imps)
+
+                    print levels
+                    
+                    
+                    for i in range(len(imps)):
+                        
+                        #imp = imps[i]
+                        imps[i].show()
+                        IJ.selectWindow(imps[i].getID())
+                        #IJ.saveAsTiff(imps[i], os.path.join(outDir, "tile" + str(i) + ".tif"))
+                        for c in range(1,imps[i].getNChannels()+1):
+                            imps[i].setC(c)
+                            IJ.runMacro("setMinAndMax("+str(int((levels[c-1][0])))+","+str(int((levels[c-1][1])))+");")
+                            #imps[i].setDisplayRange(levels[c-1][0], levels[c-1][1])                        
+                        #IJ.saveAsTiff(imps[i], os.path.join(outDir, "tile" + str(i) + "_leveled.tif"))
+                        StackConverter(imps[i]).convertToRGB()
+                        IJ.saveAsTiff(imps[i], os.path.join(outDir, "tile" + str(i) + "_leveled_rgb.tif"))
+                        imps[i].close()    
+
                     
                 if doStitch:
                     IJ.log("-- STITCHING: " + inFile)
@@ -248,7 +303,8 @@ def main():
                     if not os.path.exists(logFile):
                         IJ.log("ERROR: could not find log file for file: "+ inFile)
                     
-                    ((xtiles, ytiles), rolloff) = getParametersFromLog(logFile)
+                    #deconvBorder = 64
+                    ((xtiles, ytiles), rolloff) = getParametersFromLog(logFile, deconvBorder)
                     
                     # create stitching output directory
                     stitchDir = inFile + "_STITCHED"
@@ -256,22 +312,50 @@ def main():
                         os.makedirs(stitchDir)
                         
                     # check that rolloff is at least a minimum value (1% at the moment)
-                    overlapPercent = int(rolloff*100) if int(rolloff*100) > minRolloff else minRolloff
+                    # TODO: integer cast necessary here
+                    overlapPercent = (rolloff*100) if (rolloff*100) > minRolloff else minRolloff
+
+                    print overlapPercent
+                    #overlapPercent = 3.5
                     
                     stitchCmd = "Grid/Collection stitching"
-                    stitchOptions = ('''type=[Grid: snake by rows] order=[Right & Down                ]
+                    
+                    #dummyStitching = True
+                    
+                    # real stitching with overlap calculation
+                    if not dummyStitching:
+                        stitchOptions = ('''type=[Grid: snake by rows] order=[Right & Down                ]
                                          grid_size_x='''+str(xtiles)+''' grid_size_y='''+str(ytiles)+" tile_overlap="+ str(overlapPercent)+
-                                         ''' first_file_index_i=0 directory=''' +
-                                         outDir + ''' file_names=tile{i}.tif output_textfile_name=TileConfiguration.txt 
+                                         ''' first_file_index_i=0 directory=[''' +
+                                         outDir + '''] file_names=tile{i}_leveled_rgb.tif output_textfile_name=TileConfiguration.txt 
                                          fusion_method=[Linear Blending] regression_threshold=0.30 
                                          max/avg_displacement_threshold=2.50 absolute_displacement_threshold=3.50 
-                                         compute_overlap computation_parameters=[Save computation time (but use more RAM)] 
+                                         compute_overlap subpixel_accuracy computation_parameters=[Save computation time (but use more RAM)] 
                                          image_output=[Fuse and display]''')
+                                         
+                    # dummy stitching -> fuse tiles based on configuration and overlap
+                    else:                     
+                        stitchOptions = ('''type=[Grid: snake by rows] order=[Right & Down                ]
+                                         grid_size_x='''+str(xtiles)+''' grid_size_y='''+str(ytiles)+" tile_overlap="+ str(overlapPercent)+
+                                         ''' first_file_index_i=0 directory=[''' +
+                                         outDir + '''] file_names=tile{i}_leveled_rgb.tif output_textfile_name=TileConfiguration.txt 
+                                         fusion_method=[Linear Blending] regression_threshold=0.30 
+                                         max/avg_displacement_threshold=2.50 absolute_displacement_threshold=3.50 
+                                         subpixel_accuracy computation_parameters=[Save computation time (but use more RAM)] 
+                                         image_output=[Fuse and display]''')
+                                         
+                    
                     IJ.run(stitchCmd, stitchOptions)
                     
                     outFile = os.path.join(inFile + "_STITCHED", "stitched.tif")
                     imp = IJ.getImage()
                     changeLUTOrder(imp, channelOrderInt)
+
+                    levels = getChannelMinAndMax([imp])
+                    for c in range(1,imp.getNChannels()+1):
+                        imp.setC(c)
+                        IJ.runMacro("setMinAndMax("+str(int((levels[c-1][0])))+","+str(int((levels[c-1][1])))+");")
+                    
                     IJ.saveAsTiff(imp, outFile)
                     imp.close()
                     
